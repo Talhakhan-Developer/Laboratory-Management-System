@@ -7,6 +7,7 @@ use App\Models\Payments;
 use App\Models\ReferralCommission;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use App\Models\Bills;
 
@@ -45,10 +46,39 @@ class DashboardController extends Controller
         $todayStart = Carbon::today()->startOfDay();
         $todayEnd = Carbon::today()->endOfDay();
 
-        $billedToday = Bills::whereBetween('created_at', [$todayStart, $todayEnd])->sum('amount') ?? 0;
-        $paidToday = Payments::whereBetween('created_at', [$todayStart, $todayEnd])->sum('amount') ?? 0;
-        $billsCountToday = Bills::whereBetween('created_at', [$todayStart, $todayEnd])->count();
-        $paymentsCountToday = Payments::whereBetween('created_at', [$todayStart, $todayEnd])->count();
+        // Include newly created bills and bills updated today (some flows update existing bill rows rather than creating new ones)
+        $billedToday = Bills::where(function($q) use ($todayStart, $todayEnd) {
+            $q->whereBetween('created_at', [$todayStart, $todayEnd])
+              ->orWhereBetween('updated_at', [$todayStart, $todayEnd]);
+            })->sum('amount') ?? 0;
+                // Only use payments.date when column exists (older schema)
+                if (Schema::hasColumn('payments', 'date')) {
+                    $paidToday = Payments::where(function($q) use ($todayStart, $todayEnd) {
+                        $q->whereBetween('created_at', [$todayStart, $todayEnd])
+                          ->orWhereDate('date', Carbon::today());
+                    })->sum('amount') ?? 0;
+                    $paymentsCountToday = Payments::where(function($q) use ($todayStart, $todayEnd) {
+                        $q->whereBetween('created_at', [$todayStart, $todayEnd])
+                          ->orWhereDate('date', Carbon::today());
+                    })->count();
+                } else {
+                    $paidToday = Payments::whereBetween('created_at', [$todayStart, $todayEnd])->sum('amount') ?? 0;
+                    $paymentsCountToday = Payments::whereBetween('created_at', [$todayStart, $todayEnd])->count();
+                }
+        // Also include referral commissions that were marked paid today (some commission records are created earlier, and are marked paid later)
+        $paidCommissionsToday = ReferralCommission::where('status', 'paid')
+            ->whereBetween('updated_at', [$todayStart, $todayEnd])
+            ->sum('commission_amount') ?? 0;
+
+        $commissionsCountToday = ReferralCommission::where('status', 'paid')
+            ->whereBetween('updated_at', [$todayStart, $todayEnd])
+            ->count();
+
+        $paidToday = ($paidToday ?? 0) + $paidCommissionsToday;
+        $billsCountToday = Bills::where(function($q) use ($todayStart, $todayEnd) {
+            $q->whereBetween('created_at', [$todayStart, $todayEnd])
+              ->orWhereBetween('updated_at', [$todayStart, $todayEnd]);
+            })->count();
 
         // Prepare monthly billed and paid totals for last 12 months
         $end = Carbon::now()->endOfMonth();
@@ -79,10 +109,11 @@ class DashboardController extends Controller
             ->toArray();
         
         // Query paid commissions from ReferralCommission table
+        // Use updated_at for paid commissions grouping so a commission paid today but created earlier is counted under the month it was paid
         $paidCommissionsRows = DB::table('referral_commissions')
             ->where('status', 'paid')
-            ->select(DB::raw("DATE_FORMAT(created_at, '%Y-%m') as month"), DB::raw('COALESCE(SUM(commission_amount),0) as total'))
-            ->whereBetween('created_at', [$start->toDateTimeString(), $end->toDateTimeString()])
+            ->select(DB::raw("DATE_FORMAT(updated_at, '%Y-%m') as month"), DB::raw('COALESCE(SUM(commission_amount),0) as total'))
+            ->whereBetween('updated_at', [$start->toDateTimeString(), $end->toDateTimeString()])
             ->groupBy('month')
             ->pluck('total', 'month')
             ->toArray();
@@ -125,10 +156,11 @@ class DashboardController extends Controller
             ->toArray();
 
         // Daily Paid (Commissions)
+        // Use updated_at for daily paid commission grouping to reflect when a commission was paid, not when it was created
         $dailyPaidCommissionsRows = DB::table('referral_commissions')
             ->where('status', 'paid')
-            ->select(DB::raw("DATE_FORMAT(created_at, '%Y-%m-%d') as day"), DB::raw('COALESCE(SUM(commission_amount),0) as total'))
-            ->whereBetween('created_at', [$dailyStart, $dailyEnd])
+            ->select(DB::raw("DATE_FORMAT(updated_at, '%Y-%m-%d') as day"), DB::raw('COALESCE(SUM(commission_amount),0) as total'))
+            ->whereBetween('updated_at', [$dailyStart, $dailyEnd])
             ->groupBy('day')
             ->pluck('total', 'day')
             ->toArray();
@@ -150,6 +182,7 @@ class DashboardController extends Controller
             'paidToday' => $paidToday,
             'billsCountToday' => $billsCountToday,
             'paymentsCountToday' => $paymentsCountToday,
+            'commissionsCountToday' => $commissionsCountToday ?? 0,
             'chartLabels' => $labels,
             'chartBilled' => $billedData,
             'chartPaid' => $paidData,

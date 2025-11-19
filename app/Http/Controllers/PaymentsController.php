@@ -57,7 +57,8 @@ class PaymentsController extends Controller
         $payments->type = $request->type;
         $payments->account_head = $request->account_head;
         $payments->amount = $request->amount;
-        $payments->date = date('y-m-d');
+        // Use four-digit year to ensure date field is stored in proper 'YYYY-MM-DD' format
+        $payments->date = date('Y-m-d');
         $payments->employee_name = Auth::user()->name;
 
         $maincompany = MainCompanys::where('id', 1)->first();

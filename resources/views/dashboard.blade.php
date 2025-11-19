@@ -175,7 +175,7 @@
                                 </div>
                                 <div class="content-section">
                                     <h5 class="card-title dashboard-card-unified">Transactions Today</h5>
-                                    <p class="dashboard-card-text1">Bills: {{ $billsCountToday ?? 0 }} | Payments: {{ $paymentsCountToday ?? 0 }}</p>
+                                    <p class="dashboard-card-text1">Bills: {{ $billsCountToday ?? 0 }} | Payments: {{ $paymentsCountToday ?? 0 }} | Commissions: {{ $commissionsCountToday ?? 0 }}</p>
                                 </div>
                             </div>
                         </div>

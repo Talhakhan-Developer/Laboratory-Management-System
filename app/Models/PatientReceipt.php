@@ -4,6 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Bills;
+use App\Models\Payments;
+use App\Models\MainCompanys;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class PatientReceipt extends Model
 {
@@ -182,14 +189,88 @@ class PatientReceipt extends Model
      */
     public function markAsPaid()
     {
-        $this->status = 'paid';
-        // Mark all tests as paid
-        if (is_array($this->tests)) {
-            foreach ($this->tests as &$test) {
-                $test['paid_status'] = 'paid';
+        // Wrap in transaction to ensure bill & payment creation happens atomically
+        DB::beginTransaction();
+        try {
+            // Ensure tests are marked paid (avoid indirect modification on casted attribute)
+            $testsArr = is_array($this->tests) ? $this->tests : (is_string($this->tests) ? json_decode((string)$this->tests, true) : []);
+            if (is_array($testsArr)) {
+                foreach ($testsArr as &$test) {
+                    $test['paid_status'] = 'paid';
+                }
             }
+            $this->tests = $testsArr;
+            $this->status = 'paid';
+            $this->save();
+
+            // Create or update related bill for this patient (Bills->patient_id is required for Payments FK)
+            $bill = Bills::firstOrCreate(
+                ['patient_id' => $this->patient_id],
+                [
+                    'amount' => $this->total_amount ?? 0,
+                    'total_price' => $this->total_amount ?? 0,
+                    'paid_amount' => 0,
+                    'due_amount' => $this->total_amount ?? 0,
+                    'status' => 'unpaid',
+                    'all_test' => is_array($this->tests) ? json_encode($this->tests) : ($this->tests ?? '[]')
+                ]
+            );
+
+            // Update bill with accurate totals if needed
+            $bill->total_price = (float)($bill->total_price ?? $this->total_amount ?? 0);
+            $bill->amount = (float)($bill->amount ?? $this->total_amount ?? 0);
+            $bill->all_test = is_array($this->tests) ? json_encode($this->tests) : ($this->tests ?? '[]');
+
+            // If it's already paid, we won't duplicate payments; compute existing paid
+            $existingPaid = (float) Payments::where('bill_id', $bill->id)->sum('amount');
+            $totalToPay = (float) ($this->total_amount ?? 0);
+            $delta = max(0, $totalToPay - $existingPaid);
+
+            if ($delta > 0) {
+                // Create a payment tied to the bill
+                $payment = new Payments();
+                $payment->bill_id = $bill->id;
+                $payment->amount = $delta;
+                $payment->method = 'Cash';
+                // Save a date if column exists; if not, created_at will be used
+                try {
+                    if (Schema::hasColumn('payments', 'date')) {
+                        $payment->date = date('Y-m-d');
+                    }
+                    if (Schema::hasColumn('payments', 'employee_name')) {
+                        $payment->employee_name = Auth::user()->name ?? ($this->printed_by ?? null);
+                    }
+                } catch (\Exception $e) {
+                    // Graceful fallback when running in some test envs without Schema facade
+                }
+                $payment->save();
+
+                // Update company balance if company exists
+                $company = MainCompanys::where('id', 1)->first();
+                if ($company) {
+                    $company->balance = ($company->balance ?? 0) + $delta;
+                    $company->save();
+                }
+
+                // Update bill's paid_amount and due_amount
+                $bill->paid_amount = (float) Payments::where('bill_id', $bill->id)->sum('amount');
+                $bill->due_amount = max(0, $bill->total_price - $bill->paid_amount);
+            }
+
+            // Mark bill as paid if fully paid
+            if ($bill->paid_amount >= ($bill->total_price ?? 0) && ($bill->total_price ?? 0) > 0) {
+                $bill->status = 'paid';
+            }
+
+            $bill->save();
+
+            DB::commit();
+            return true;
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to mark receipt as paid: ' . $e->getMessage(), ['receipt_id' => $this->id ?? null]);
+            return false;
         }
-        return $this->save();
     }
 
     /**

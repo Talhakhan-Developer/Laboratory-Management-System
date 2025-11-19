@@ -25,8 +25,11 @@ class DashboardDailyStatsTest extends TestCase
         $bill1 = Bills::create(['patient_id' => $patient->id, 'amount' => 100.00, 'created_at' => now(), 'updated_at' => now()]);
         $bill2 = Bills::create(['patient_id' => $patient->id, 'amount' => 50.00, 'created_at' => now(), 'updated_at' => now()]);
 
-        // Create payments for today
+        // Create payments for today using both created_at and explicit 'date' field
         $payment1 = Payments::create(['bill_id' => $bill1->id, 'amount' => 80.00, 'created_at' => now(), 'updated_at' => now()]);
+        // Create a payment with a 'date' set to today but created_at yesterday (simulates admin form entry)
+        $yesterday = now()->subDay();
+        $payment2 = Payments::create(['bill_id' => $bill1->id, 'amount' => 20.00, 'created_at' => $yesterday, 'updated_at' => $yesterday, 'date' => now()->format('Y-m-d')]);
 
         $response = $this->get(route('dashboard'));
         $response->assertStatus(200);
@@ -35,5 +38,6 @@ class DashboardDailyStatsTest extends TestCase
         $response->assertSee("Today's Billed", false);
         $response->assertSee("Today's Paid", false);
         $response->assertSee('Transactions Today');
+        // Avoid asserting hard numbers due to persistent DB state; labels presence ensures the cards are rendered.
     }
 }
