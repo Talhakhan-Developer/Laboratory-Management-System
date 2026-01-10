@@ -1,7 +1,7 @@
 <style>
     @media print {
         :root {
-            --print-header-height: 40mm;
+            --print-header-height: 32mm;
             --print-footer-height: 45mm;
             /* Gap to lift footer above the page bottom to leave space below it for an extra section */
             --print-footer-bottom-gap: 45mm; /* Adjust this value to add/remove the space below footer */
@@ -29,7 +29,8 @@
             font-size: 20px !important;
         }
         .print-header .lab-address  {
-            font-size: 36px !important;
+            font-size: 20px !important;
+            line-height: 1.2 !important;
         }
 
         .print-header .lab-contact  {
@@ -69,13 +70,13 @@
         }
 
         .print-header .print-inner table td img.header-logo {
-            width: 40mm !important;
-            height: 40mm !important;
+            width: 30mm !important;
+            height: 30mm !important;
         }
 
         .print-header .print-inner .print-logo img.header-logo {
-            width: 40mm !important;
-            height: 40mm !important;
+            width: 30mm !important;
+            height: 30mm !important;
             border-radius: 50% !important;
             border: 2px solid #8d2d36 !important;
             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
@@ -143,8 +144,8 @@
                     ">
                     <img src="{{ asset('assets/images/logo.png') }}" class="header-logo" alt="Logo"
                         style="
-                            width: 50mm;
-                            height: 50mm;
+                            width: 35mm;
+                            height: 35mm;
                             border-radius: 50%;
                             border: 3px solid #8d2d36;
                             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -179,13 +180,13 @@
             </div>
                     </div>
                 </td>
-                <td width="20%" >
+                <td width="20%" style="padding-left: 4px; vertical-align: middle;">
                     <div class="lab-address"
                         style="
                         text-align: left;
                             color: #8d2d36;
-                            margin: 2px 0 0 0;
-                            line-height: 1.2;
+                            margin: 0;
+                            line-height: 1.1;
                         ">
                         <strong style="font-size: 20px ">Bacha Khan</strong> <br /> BS Pathology (KMU)
                         DMLT KPK Peshawar CT Pathology Department Saidu Medical

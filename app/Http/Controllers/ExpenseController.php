@@ -20,6 +20,9 @@ class ExpenseController extends Controller
             $data = Expense::with('user')->orderBy('expense_date', 'desc')->get();
             return DataTables::of($data)
                 ->addIndexColumn()
+                ->addColumn('expense_date', function ($row) {
+                    return $row->expense_date ? \Carbon\Carbon::parse($row->expense_date)->format('d-m-Y') : 'N/A';
+                })
                 ->addColumn('user_name', function ($row) {
                     return $row->user->name ?? 'N/A';
                 })
