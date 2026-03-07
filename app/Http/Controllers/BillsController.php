@@ -622,7 +622,8 @@ class BillsController extends Controller
             }
 
             // Determine the bill total to be considered as 'paid'
-            $totalPrice = (float) ($bills->total_price ?? ($bills->amount - ($bills->discount ?? 0)));
+            // Note: amount already has discount subtracted (form sends total_ = subtotal - discount)
+            $totalPrice = (float) ($bills->total_price ?? $bills->amount);
             if ($totalPrice <= 0) {
                 return response()->json(['success' => false, 'message' => 'Invalid bill total.'], 400);
             }
