@@ -26,11 +26,16 @@ class FinancialStatisticsController extends Controller
         $endDate = Carbon::parse($month . '-01')->endOfMonth();
 
         // Revenue stats
-        $totalRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('total_price') ?: 0;
-        $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
-        $totalDue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('due_amount') ?: 0;
+        // DB total_price/amount already has discount subtracted, so it IS the net revenue
+        $netRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum(DB::raw('COALESCE(total_price, amount)')) ?: 0;
         $totalDiscount = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('discount') ?: 0;
+        $grossRevenue = $netRevenue + $totalDiscount; // Reconstruct pre-discount amount
+        $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
+        $totalDue = $netRevenue - $totalCollected; // Outstanding = what's owed minus what's paid
         $billCount = Bills::whereBetween('created_at', [$startDate, $endDate])->count();
+
+        // Keep $totalRevenue for backward compat in view
+        $totalRevenue = $grossRevenue;
 
         // Expense stats
         $totalExpenses = Expense::whereBetween('expense_date', [$startDate, $endDate])->sum('amount') ?: 0;
@@ -62,7 +67,7 @@ class FinancialStatisticsController extends Controller
             
             $monthlyTrends[] = [
                 'month' => $trendMonth->format('M Y'),
-                'revenue' => Bills::whereBetween('created_at', [$tStart, $tEnd])->sum('total_price') ?: 0,
+                'revenue' => Bills::whereBetween('created_at', [$tStart, $tEnd])->sum(DB::raw('COALESCE(total_price, amount)')) ?: 0,
                 'collected' => Bills::whereBetween('created_at', [$tStart, $tEnd])->sum('paid_amount') ?: 0,
                 'expenses' => Expense::whereBetween('expense_date', [$tStart, $tEnd])->sum('amount') ?: 0,
             ];
@@ -78,7 +83,7 @@ class FinancialStatisticsController extends Controller
         // Daily revenue for chart
         $dailyRevenue = Bills::select(
                 DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total_price) as revenue'),
+                DB::raw('SUM(COALESCE(total_price, amount)) as revenue'),
                 DB::raw('SUM(paid_amount) as collected')
             )
             ->whereBetween('created_at', [$startDate, $endDate])
@@ -87,7 +92,7 @@ class FinancialStatisticsController extends Controller
             ->get();
 
         return view('financial.dashboard', compact(
-            'month', 'totalRevenue', 'totalCollected', 'totalDue', 'totalDiscount',
+            'month', 'grossRevenue', 'netRevenue', 'totalRevenue', 'totalCollected', 'totalDue', 'totalDiscount',
             'billCount', 'totalExpenses', 'expensesByCategory', 'salaryStats',
             'commissionStats', 'referralCommissionTotal', 'referralCommissionPending',
             'totalOutgoing', 'netProfit', 'monthlyTrends', 'paymentMethods', 'dailyRevenue'
@@ -100,8 +105,16 @@ class FinancialStatisticsController extends Controller
     public function revenueAnalysis(Request $request)
     {
         $month = $request->get('month', now()->format('Y-m'));
-        $startDate = Carbon::parse($month . '-01')->startOfMonth();
-        $endDate = Carbon::parse($month . '-01')->endOfMonth();
+        $day = $request->get('day', ''); // optional day filter (Y-m-d)
+        $filterMode = $day ? 'day' : 'month';
+
+        if ($day) {
+            $startDate = Carbon::parse($day)->startOfDay();
+            $endDate = Carbon::parse($day)->endOfDay();
+        } else {
+            $startDate = Carbon::parse($month . '-01')->startOfMonth();
+            $endDate = Carbon::parse($month . '-01')->endOfMonth();
+        }
 
         $bills = Bills::with('patient')
             ->whereBetween('created_at', [$startDate, $endDate])
@@ -109,7 +122,7 @@ class FinancialStatisticsController extends Controller
             ->get();
 
         // Revenue by status
-        $revenueByStatus = Bills::select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total_price) as total'))
+        $revenueByStatus = Bills::select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(COALESCE(total_price, amount)) as total'))
             ->whereBetween('created_at', [$startDate, $endDate])
             ->groupBy('status')
             ->get();
@@ -117,9 +130,9 @@ class FinancialStatisticsController extends Controller
         // Daily revenue
         $dailyRevenue = Bills::select(
                 DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total_price) as revenue'),
+                DB::raw('SUM(COALESCE(total_price, amount)) as revenue'),
                 DB::raw('SUM(paid_amount) as collected'),
-                DB::raw('SUM(due_amount) as due'),
+                DB::raw('SUM(COALESCE(total_price, amount) - paid_amount) as due'),
                 DB::raw('COUNT(*) as bill_count')
             )
             ->whereBetween('created_at', [$startDate, $endDate])
@@ -149,13 +162,17 @@ class FinancialStatisticsController extends Controller
         usort($testRevenue, fn($a, $b) => $b['total'] <=> $a['total']);
         $testRevenue = array_slice($testRevenue, 0, 15);
 
-        $totalRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('total_price') ?: 0;
+        // DB total_price/amount already has discount subtracted, so it IS the net revenue
+        $netRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum(DB::raw('COALESCE(total_price, amount)')) ?: 0;
+        $totalDiscount = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('discount') ?: 0;
+        $grossRevenue = $netRevenue + $totalDiscount; // Reconstruct pre-discount amount
         $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
-        $totalDue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('due_amount') ?: 0;
+        $totalDue = $netRevenue - $totalCollected;
+        $totalRevenue = $grossRevenue; // alias
 
         return view('financial.revenue', compact(
-            'month', 'bills', 'revenueByStatus', 'dailyRevenue', 'testRevenue',
-            'totalRevenue', 'totalCollected', 'totalDue'
+            'month', 'day', 'filterMode', 'bills', 'revenueByStatus', 'dailyRevenue', 'testRevenue',
+            'grossRevenue', 'netRevenue', 'totalRevenue', 'totalDiscount', 'totalCollected', 'totalDue'
         ));
     }
 
@@ -284,14 +301,25 @@ class FinancialStatisticsController extends Controller
     public function profitLoss(Request $request)
     {
         $month = $request->get('month', now()->format('Y-m'));
-        $startDate = Carbon::parse($month . '-01')->startOfMonth();
-        $endDate = Carbon::parse($month . '-01')->endOfMonth();
+        $day = $request->get('day', ''); // optional day filter (Y-m-d)
+        $filterMode = $day ? 'day' : 'month';
+
+        if ($day) {
+            $startDate = Carbon::parse($day)->startOfDay();
+            $endDate = Carbon::parse($day)->endOfDay();
+        } else {
+            $startDate = Carbon::parse($month . '-01')->startOfMonth();
+            $endDate = Carbon::parse($month . '-01')->endOfMonth();
+        }
 
         // Income
-        $totalRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('total_price') ?: 0;
-        $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
-        $totalDue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('due_amount') ?: 0;
+        // DB total_price/amount already has discount subtracted, so it IS the net revenue
+        $netRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum(DB::raw('COALESCE(total_price, amount)')) ?: 0;
         $totalDiscount = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('discount') ?: 0;
+        $grossRevenue = $netRevenue + $totalDiscount; // Reconstruct pre-discount amount
+        $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
+        $totalDue = $netRevenue - $totalCollected; // Outstanding = what's owed minus what's paid
+        $totalRevenue = $grossRevenue; // alias
 
         // Expenditures
         $totalExpenses = Expense::whereBetween('expense_date', [$startDate, $endDate])->sum('amount') ?: 0;
@@ -301,7 +329,6 @@ class FinancialStatisticsController extends Controller
 
         $totalOutgoing = $totalExpenses + $totalSalaries + $totalDoctorCommissions + $totalReferralCommissions;
         $netProfit = $totalCollected - $totalOutgoing;
-        $grossProfit = $totalRevenue - $totalDiscount;
 
         // Expense breakdown
         $expenseBreakdown = Expense::select('category', DB::raw('SUM(amount) as total'))
@@ -310,31 +337,43 @@ class FinancialStatisticsController extends Controller
             ->orderByDesc('total')
             ->get();
 
-        // Monthly P&L trend
+        // Monthly P&L trend (only for month view)
         $plTrends = [];
-        for ($i = 5; $i >= 0; $i--) {
-            $trendMonth = now()->subMonths($i);
-            $tStart = $trendMonth->copy()->startOfMonth();
-            $tEnd = $trendMonth->copy()->endOfMonth();
-            $mKey = $trendMonth->format('Y-m');
+        if ($filterMode !== 'day') {
+            for ($i = 5; $i >= 0; $i--) {
+                $trendMonth = now()->subMonths($i);
+                $tStart = $trendMonth->copy()->startOfMonth();
+                $tEnd = $trendMonth->copy()->endOfMonth();
+                $mKey = $trendMonth->format('Y-m');
 
-            $income = Bills::whereBetween('created_at', [$tStart, $tEnd])->sum('paid_amount') ?: 0;
-            $expenses = Expense::whereBetween('expense_date', [$tStart, $tEnd])->sum('amount') ?: 0;
-            $salaries = SalaryPayment::where('month', $mKey)->where('status', 'paid')->sum('net_salary') ?: 0;
-            $commissions = DoctorCommission::whereBetween('created_at', [$tStart, $tEnd])->sum('commission_amount') ?: 0;
+                $income = Bills::whereBetween('created_at', [$tStart, $tEnd])->sum('paid_amount') ?: 0;
+                $expenses = Expense::whereBetween('expense_date', [$tStart, $tEnd])->sum('amount') ?: 0;
+                $salaries = SalaryPayment::where('month', $mKey)->where('status', 'paid')->sum('net_salary') ?: 0;
+                $commissions = DoctorCommission::whereBetween('created_at', [$tStart, $tEnd])->sum('commission_amount') ?: 0;
 
-            $plTrends[] = [
-                'month' => $trendMonth->format('M Y'),
-                'income' => $income,
-                'outgoing' => $expenses + $salaries + $commissions,
-                'profit' => $income - ($expenses + $salaries + $commissions),
-            ];
+                $plTrends[] = [
+                    'month' => $trendMonth->format('M Y'),
+                    'income' => $income,
+                    'outgoing' => $expenses + $salaries + $commissions,
+                    'profit' => $income - ($expenses + $salaries + $commissions),
+                ];
+            }
+        }
+
+        // Bills list (for day view detail table)
+        $bills = collect();
+        if ($filterMode === 'day') {
+            $bills = Bills::with('patient')
+                ->whereBetween('created_at', [$startDate, $endDate])
+                ->orderBy('created_at', 'desc')
+                ->get();
         }
 
         return view('financial.profit-loss', compact(
-            'month', 'totalRevenue', 'totalCollected', 'totalDue', 'totalDiscount',
+            'month', 'day', 'filterMode', 'bills',
+            'grossRevenue', 'netRevenue', 'totalRevenue', 'totalCollected', 'totalDue', 'totalDiscount',
             'totalExpenses', 'totalSalaries', 'totalDoctorCommissions', 'totalReferralCommissions',
-            'totalOutgoing', 'netProfit', 'grossProfit', 'expenseBreakdown', 'plTrends'
+            'totalOutgoing', 'netProfit', 'expenseBreakdown', 'plTrends'
         ));
     }
 
@@ -348,10 +387,13 @@ class FinancialStatisticsController extends Controller
         $endDate = Carbon::parse($month . '-01')->endOfMonth();
 
         // All financials
-        $totalRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('total_price') ?: 0;
-        $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
-        $totalDue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('due_amount') ?: 0;
+        // DB total_price/amount already has discount subtracted, so it IS the net revenue
+        $netRevenue = Bills::whereBetween('created_at', [$startDate, $endDate])->sum(DB::raw('COALESCE(total_price, amount)')) ?: 0;
         $totalDiscount = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('discount') ?: 0;
+        $grossRevenue = $netRevenue + $totalDiscount; // Reconstruct pre-discount amount
+        $totalCollected = Bills::whereBetween('created_at', [$startDate, $endDate])->sum('paid_amount') ?: 0;
+        $totalDue = $netRevenue - $totalCollected;
+        $totalRevenue = $grossRevenue; // alias
         $billCount = Bills::whereBetween('created_at', [$startDate, $endDate])->count();
         $patientCount = Patients::whereBetween('created_at', [$startDate, $endDate])->count();
 
@@ -382,9 +424,10 @@ class FinancialStatisticsController extends Controller
             ->get();
 
         return view('financial.monthly-report', compact(
-            'month', 'startDate', 'endDate', 'totalRevenue', 'totalCollected', 'totalDue',
-            'totalDiscount', 'billCount', 'patientCount', 'totalExpenses', 'totalSalaries',
-            'salariesPaid', 'salariesPending', 'totalDoctorCommissions', 'totalReferralCommissions',
+            'month', 'startDate', 'endDate', 'grossRevenue', 'netRevenue', 'totalRevenue',
+            'totalCollected', 'totalDue', 'totalDiscount', 'billCount', 'patientCount',
+            'totalExpenses', 'totalSalaries', 'salariesPaid', 'salariesPending',
+            'totalDoctorCommissions', 'totalReferralCommissions',
             'expenseBreakdown', 'totalOutgoing', 'netProfit', 'topReferrals'
         ));
     }

@@ -174,9 +174,9 @@
                 color-adjust: exact !important;
             }
 
-            /* Burgundy backgrounds and borders must print */
-            div[style*="background-color: #8d2d36"],
-            div[style*="background-color:#8d2d36"],
+            /* Light backgrounds and borders must print */
+            div[style*="background-color: #e9ecef"],
+            div[style*="background-color:#e9ecef"],
             table[style*="border-bottom: 2px solid #8d2d36"],
             td[style*="border-left: 3px solid #8d2d36"],
             td[style*="border-right: 3px solid #8d2d36"],
@@ -458,8 +458,8 @@
             }
 
             .section-title {
-                background: #8d2d36;
-                color: #fff;
+                background: #e9ecef;
+                color: #333;
                 border-radius: 4px;
                 padding: 6px 8px;
                 text-align: center;
